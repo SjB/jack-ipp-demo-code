@@ -1,5 +1,3 @@
-#gcc -L/opt/intel/ipp/lib/intel64_lin -I/opt/intel/ipp/include -ljackd -lipp src/Jack_wav_LPF.c -o test
-
 set(HEADERS
   wavfile.h)
 
