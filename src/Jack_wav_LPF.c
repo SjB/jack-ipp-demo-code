@@ -36,14 +36,14 @@ void write_to_csv(Ipp64f* dst, Ipp64f* src, int size)
 	fclose(pFile);
 }
 
-int copy_frames_to_ipp64f(Ipp64f* dst, float* src, int size)
+int copybuffer_float_to_ipp64f(Ipp64f* dst, float* src, int size)
 {	
 	for(int i = 0; i < size; i++)
 		dst[i] = src[i];
 	return size;
 }
 
-int copy_frames_to_float(float* dst, Ipp64f* src, int size) 
+int copybuffer_ipp64f_to_float(float* dst, Ipp64f* src, int size) 
 {
 	for(int i = 0; i < size; i++)
 		dst[i] = (float)src[i];
@@ -108,12 +108,12 @@ int process (jack_nframes_t nframes, void *arg)
 	int read_cnt = wavfile_readframes((wavfile_info_t*)arg, 1, audio_in, nframes);
 	
 	Ipp64f* src = ippsMalloc_64f(read_cnt);
-	read_cnt = copy_frames_to_ipp64f(src, audio_in, read_cnt);
+	read_cnt = copybuffer_float_to_ipp64f(src, audio_in, read_cnt);
 
 	Ipp64f* dst = ippsMalloc_64f(read_cnt);
 	read_cnt = filter(dst, src, read_cnt);
 
-	read_cnt = copy_frames_to_float(out, dst, read_cnt);
+	read_cnt = copybuffer_ipp64f_to_float(out, dst, read_cnt);
 	
 	return 0;
 }
