@@ -18,99 +18,78 @@
 
 #include <jack/jack.h>
 #include <jack/control.h>
-#include "ipp.h"
-
+#include <ipp.h>
+#include "wavfile.h"
 
 jack_port_t *input_port;
 jack_port_t *output_port1;
 //jack_port_t *output_port2;
 
-#define EXIT_MAIN exitLine:
-#define check_sts(st) if((st) != ippStsNoErr) goto exitLine;
+#define ROUND(x) ((long)(x + 0.5))
 
-
-float filter(jack_default_audio_sample_t* in, jack_default_audio_sample_t* out, jack_nframes_t nframes) {
-
-
-	FILE *pOutBin;
-	int n = 419190*2;
-	Ipp64f bytes[n];
-
-	Ipp64f* original_audio_buffer = ippsMalloc_64f(nframes * sizeof(Ipp64f));
-	Ipp64f* processed_audio_buffer = ippsMalloc_64f(nframes * sizeof(Ipp64f));
-
-	pOutBin = fopen("/tmp/out.bin","rb");
-	fread(bytes,sizeof(Ipp64f),n, pOutBin);
-	fclose(pOutBin);
-
-	for(int i=0;i<n;i+=2){
-		original_audio_buffer[i] = (Ipp64f)bytes[i];
-		printf("%f \n", original_audio_buffer[i]);
+void write_to_csv(Ipp64f* dst, Ipp64f* src, int size) 
+{
+	FILE* pFile = fopen("Jack_wav_LPF.csv", "a");
+	for (int i = 0; i < size; i++) {
+		fprintf(pFile, "%d\t%.4f\t%.4f\n", i, src[i], dst[i]);
 	}
+	fclose(pFile);
+}
 
-	IppStatus status = ippStsNoErr;
+int copy_frames_to_ipp64f(Ipp64f* dst, float* src, int size)
+{	
+	for(int i = 0; i < size; i++)
+		dst[i] = src[i];
+	return size;
+}
+
+int copy_frames_to_float(float* dst, Ipp64f* src, int size) 
+{
+	for(int i = 0; i < size; i++)
+		dst[i] = (float)src[i];
+	return size;
+}
+
+int filter(Ipp64f* dst, Ipp64f* src, int nframes)
+{
 	int tapslen = 21;
-	int bufSize = 0;
+	int bufSize;
+	int specSize;
+	int tempbufferSize;
+	
+	if (ippsFIRGenGetBufferSize(tapslen, &bufSize) != ippStsNoErr)
+		return -1;
+	
+	if (ippsFIRSRGetSize(tapslen, ipp64f, &specSize, &tempbufferSize) != ippStsNoErr)
+		return -1;
 
-	check_sts(status = ippsFIRGenGetBufferSize(tapslen, &bufSize))
-
-	Ipp8u* pBuffer = NULL;
-	pBuffer = ippsMalloc_8u(bufSize);
+	Ipp8u* pBuffer = ippsMalloc_8u(bufSize);
+	Ipp64f* taps = ippsMalloc_64f(tapslen * sizeof(Ipp64f));
 
 	float rFreq = 0.2;
-	Ipp64f* taps = ippsMalloc_64f(tapslen * sizeof(Ipp64f));
-	check_sts(status = ippsFIRGenLowpass_64f(rFreq, taps, tapslen, ippWinBartlett, ippTrue, pBuffer))
-
-//	printf("Generated taps:\n");
-//	for(i = 0; i < tapslen; i++){
-//		printf("%f,", taps[i]);
-//	}
-
-	int specSize = 0;
-	int tempbufferSize;
-
-	check_sts(status = ippsFIRSRGetSize(tapslen, ipp64f, &specSize, &tempbufferSize))
-
-	IppsFIRSpec_64f* pSpec = NULL;
-	pSpec = (IppsFIRSpec_64f*) ippsMalloc_8u(specSize);
-	Ipp8u* pTempBuffer = NULL;
-	pTempBuffer = ippsMalloc_8u(tempbufferSize);
+	if (ippsFIRGenLowpass_64f(rFreq, taps, tapslen, ippWinBartlett, ippTrue, pBuffer) != ippStsNoErr)
+		goto cleanup;
+	
+	IppsFIRSpec_64f* pSpec = (IppsFIRSpec_64f*) ippsMalloc_8u(specSize);
+	Ipp8u* pTempBuffer = ippsMalloc_8u(tempbufferSize);
 
 	IppAlgType algType = ippAlgDirect;
-	check_sts(status = ippsFIRSRInit_64f(taps, tapslen, algType, pSpec))
+	if (ippsFIRSRInit_64f(taps, tapslen, algType, pSpec) != ippStsNoErr)
+		goto cleanup;
 
 	int numIters = nframes;
 	Ipp64f* pDlySrc = NULL;
 	Ipp64f* pDlyDst = NULL;
-	check_sts(status = ippsFIRSR_64f(original_audio_buffer, processed_audio_buffer, numIters, pSpec, pDlySrc, pDlyDst, pTempBuffer))
 
-	FILE *pFile;
-	pFile = fopen("Jack_wav_LPF.csv", "a");
-	for (int i = 0; i < nframes; i++) {
-		fprintf(pFile, "%d\t%.4f\t%.4f\n", i, original_audio_buffer[i], processed_audio_buffer[i]);
-	}
-	fclose(pFile);
+	if (ippsFIRSR_64f(src, dst, numIters, pSpec, pDlySrc, pDlyDst, pTempBuffer) == ippStsNoErr)
+		write_to_csv(dst, src, nframes);
 
-	for (int i = 0; i < nframes; i++) {
-		out[i] = (jack_default_audio_sample_t)(processed_audio_buffer[i]);
-
-		//printf("%f -- %f\n", in[i], out[i]);
-	}
-	//memcpy (out, processed_audio_buffer, count);
-
-
-	//free(original_audio_buffer);
-	//free(processed_audio_buffer);
-
-EXIT_MAIN
-	ippsFree(original_audio_buffer);
-	ippsFree(processed_audio_buffer);
+cleanup:
 	ippsFree(pBuffer);
 	ippsFree(taps);
 	ippsFree(pSpec);
 	ippsFree(pTempBuffer);
-	//printf("Exit status %d (%s) \n", (int) status, ippGetStatusString(status));
-	return (float) status;
+	return (float) nframes;
 }
 
 //void sjbFilter(jack_default_audio_sample_t* in, jack_default_audio_sample_t* out, jack_nframes_t nframes) {
@@ -121,24 +100,28 @@ EXIT_MAIN
 //	}
 //}
 
-int
-process (jack_nframes_t nframes, void *arg)
+int process (jack_nframes_t nframes, void *arg)
 {
-	jack_default_audio_sample_t *in, *out;
+	jack_default_audio_sample_t *out = jack_port_get_buffer (output_port1, nframes);
 
-//	printf("%d\n", nframes);
+	float* audio_in = (float*)malloc(nframes * sizeof(float));
+	int read_cnt = wavfile_readframes((wavfile_info_t*)arg, 1, audio_in, nframes);
+	
+	Ipp64f* src = ippsMalloc_64f(read_cnt);
+	read_cnt = copy_frames_to_ipp64f(src, audio_in, read_cnt);
 
-	in = jack_port_get_buffer (input_port, nframes);
-	out = jack_port_get_buffer (output_port1, nframes);
+	Ipp64f* dst = ippsMalloc_64f(read_cnt);
+	read_cnt = filter(dst, src, read_cnt);
 
-	filter(in, out, nframes);
-
+	read_cnt = copy_frames_to_float(out, dst, read_cnt);
+	
 	return 0;
 }
 
 void
 jack_shutdown (void *arg)
 {
+	wavfile_free((wavfile_info_t*)arg);
 	exit (1);
 }
 
@@ -156,15 +139,13 @@ int main() {
 	printf("Stage 0		");
 	printf("Status %x\n", status);
 
-
-
 	client = jack_client_open (client_name, options, &status, server_name);
 
-	printf("Stage 1		");
+	printf("Stage 1		");	
 	printf("Status 0x%x\n", status);
 	if (client == NULL) {
-			fprintf(stderr, "jack_client_open() failed, ""status = 0x%2.0x\n", status);
-			exit (1);
+		fprintf(stderr, "jack_client_open() failed, ""status = 0x%2.0x\n", status);
+		exit (1);
 	}
 
 	if (status & JackServerStarted) {
@@ -177,16 +158,12 @@ int main() {
 	}
 
 	printf("Stage 2		");
-    printf("Status %x\n", status);
+	printf("Status %x\n", status);
 
-
-    if (status & JackFailure) {
-    	fprintf(stderr, "Jack Failure");
-    	exit(1);
-    }
-
-
-
+	if (status & JackFailure) {
+		fprintf(stderr, "Jack Failure");
+		exit(1);
+	}
 
 	if (status & JackNameNotUnique) {
 		client_name = jack_get_client_name(client);
@@ -195,13 +172,17 @@ int main() {
 
 	fflush(stdout);
 
-	jack_set_process_callback (client, process, 0);
+	wavfile_info_t* audiodata = wavfile_readfile("/tmp/out.wav");
+	if (audiodata == NULL)
+		exit (1);
 
-	jack_on_shutdown (client, jack_shutdown, 0);
+	jack_set_process_callback (client, process, audiodata);
+
+	jack_on_shutdown (client, jack_shutdown, audiodata);
 
 	if (jack_activate(client)) {
-			fprintf (stderr, "cannot activate client");
-			exit (1);
+		fprintf (stderr, "cannot activate client");
+		exit (1);
 	}
 
 	printf("Stage 3		");
@@ -209,7 +190,6 @@ int main() {
 	fflush(stdout);
 
 	/* create two ports */
-
 
 	input_port = jack_port_register (client, "input",
 					 JACK_DEFAULT_AUDIO_TYPE,
@@ -222,7 +202,7 @@ int main() {
 		exit (1);
 	}
 
-	for (int i = 0; out_ports[i] != '\0'; i++) {
+	for (int i = 0; out_ports[i] != NULL; i++) {
 		printf("Output ports %d %s\n", i, out_ports[i]);
 		fflush(stdout);
 	}
@@ -231,14 +211,9 @@ int main() {
 		fprintf (stderr, "cannot connect input ports\n");
 	}
 
-
 	output_port1 = jack_port_register (client, "output1",
-					  JACK_DEFAULT_AUDIO_TYPE,
-					  JackPortIsOutput,0);
-
-//	output_port2 = jack_port_register (client, "output2",
-//						  JACK_DEFAULT_AUDIO_TYPE,
-//						  JackPortIsOutput,0);
+					   JACK_DEFAULT_AUDIO_TYPE,
+					   JackPortIsOutput,0);
 
 	const char ** in_ports = jack_get_ports (client, NULL, NULL, JackPortIsPhysical|JackPortIsInput);
 
@@ -247,7 +222,7 @@ int main() {
 		exit (1);
 	}
 
-	for (int i = 0; in_ports[i] != '\0'; i++) {
+	for (int i = 0; in_ports[i] != NULL; i++) {
 		printf("Input ports %d %s\n", i, in_ports[i]);
 		fflush(stdout);
 	}
@@ -255,14 +230,6 @@ int main() {
 	if (jack_connect (client, jack_port_name (output_port1), in_ports[0])) {
 		fprintf (stderr, "cannot connect output ports\n");
 	}
-
-//	if (jack_connect (client, jack_port_name (output_port2), in_ports[1])) {
-//		fprintf (stderr, "cannot connect output ports\n");
-//	}
-//	if (jack_connect (client, in_ports[2], out_ports[1])) {
-//		fprintf(stderr, "cannot connect two physical ports\n");
-//	}
-
 
 	free(out_ports);
 	free(in_ports);
@@ -272,18 +239,14 @@ int main() {
 	port_name = jack_port_name(input_port);
 	printf("Input %s\n", port_name);
 
-
 	port_name = jack_port_name(output_port1);
 	printf("Output %s\n", port_name);
-
-//	port_name = jack_port_name(output_port2);
-//	printf("Output %s\n", port_name);
-
 
 	while(1) {
 		sleep(1);
 	}
 
+	wavfile_free(audiodata);
 	//jack_client_close(client);
 
 	//clock_t end = clock();
