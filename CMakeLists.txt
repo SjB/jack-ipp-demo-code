@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 2.8)
-project (jack-demo)
+project (jack-wav-demo)
 
 link_directories("/opt/intel/ipp/lib/intel64_lin/")
 include_directories("/opt/intel/ipp/include")
